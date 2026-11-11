@@ -19,6 +19,7 @@ jointfm = "portfolio_optimization_jointfm.generator:generate"
 
 [dependency-groups]
 dev = [
+    "commitizen>=3.31",
     "portfolio-optimization",
     "pre-commit>=4",
     "pytest>=8",
@@ -45,3 +46,21 @@ select = ["E", "F", "W", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.1.0"
+version_scheme = "semver"
+tag_format = "v$version"
+update_changelog_on_bump = true
+changelog_file = "CHANGELOG.md"
+changelog_incremental = true
+major_version_zero = true
+pre_bump_hooks = [
+    "uv lock",
+    "git add uv.lock",
+]
+version_files = [
+    "pyproject.toml:^version",
+    "README.md:Current package version",
+]

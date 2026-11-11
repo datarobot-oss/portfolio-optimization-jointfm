@@ -20,10 +20,13 @@ class FakeJointFMClient:
     """Stand-in for ``jointfm_client.JointFMClient`` that records its calls.
 
     It mirrors the parts of the SDK the sampler reads: the health metadata's
-    capacity envelope and a sample forecast whose ``samples`` axis order is
-    ``(sample, horizon, column)`` and whose array is read-only. Draws scatter
-    around each column's last history value, as future log prices do, one
-    horizon per query time.
+    capacity envelope, a sample forecast whose ``samples`` axis order is
+    ``(sample, horizon, column)``, and a mean forecast whose ``mean`` axis
+    order is ``(horizon, column)``; both arrays are read-only. Draws scatter
+    around each column's last history value by ``sample_scale``, one horizon
+    per query time. The mean of column ``k`` (counted from 1) is its last
+    history value plus ``k * mean_step`` at every horizon, so it differs from
+    the scenario mean and between assets.
     """
 
     def __init__(self):
@@ -31,30 +34,30 @@ class FakeJointFMClient:
             min_series=1, max_series=10, n_input=40, n_output=100
         )
         self.sample_scale = 1.0
+        self.mean_step = 0.001
         self.from_env_kwargs = None
         self.forecast_calls = []
 
     def health(self, *, cache=False):
         return SimpleNamespace(data_generation=self.envelope)
 
-    def forecast(self, history, *, n_samples, requested_columns, **kwargs):
-        rng = np.random.default_rng(kwargs["seed"])
-        shape = (n_samples, len(kwargs["query_times"]), len(requested_columns))
-        samples = history[requested_columns].iloc[-1].to_numpy() + (
-            self.sample_scale * rng.normal(size=shape)
-        )
-        samples.flags.writeable = False
-        self.forecast_calls.append(
-            dict(
-                history=history,
-                n_samples=n_samples,
-                requested_columns=requested_columns,
-                samples=samples,
-                **kwargs,
-            )
-        )
+    def forecast(self, history, **kwargs):
+        requested_columns = kwargs["requested_columns"]
+        last = history[requested_columns].iloc[-1].to_numpy()
+        horizon_count = len(kwargs["query_times"])
+        if kwargs["return_mode"] == "mean":
+            column_steps = self.mean_step * np.arange(1, len(requested_columns) + 1)
+            output = "mean"
+            values = np.tile(last + column_steps, (horizon_count, 1))
+        else:
+            rng = np.random.default_rng(kwargs["seed"])
+            shape = (kwargs["n_samples"], horizon_count, len(requested_columns))
+            output = "samples"
+            values = last + self.sample_scale * rng.normal(size=shape)
+        values.flags.writeable = False
+        self.forecast_calls.append(dict(history=history, **kwargs, **{output: values}))
         return SimpleNamespace(
-            samples=samples, requested_columns=tuple(requested_columns)
+            **{output: values}, requested_columns=tuple(requested_columns)
         )
 
 
@@ -87,4 +90,13 @@ def returns_dict(price_data):
         price_data,
         regime_dict=None,
         returns_compute_settings=ReturnsComputeSettings(return_type="LOG", freq=1),
+    )
+
+
+@pytest.fixture()
+def linear_returns_dict(price_data):
+    return calculate_returns(
+        price_data,
+        regime_dict=None,
+        returns_compute_settings=ReturnsComputeSettings(return_type="LINEAR", freq=1),
     )

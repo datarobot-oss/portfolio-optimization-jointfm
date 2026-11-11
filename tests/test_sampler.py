@@ -11,16 +11,57 @@ from portfolio_optimization.utils import calculate_returns
 from portfolio_optimization_jointfm import (
     JointFMSettings,
     generate_horizon_samples_jointfm,
+    generate_samples_and_mean_jointfm,
     generate_samples_jointfm,
 )
 
 from .conftest import TICKERS
 
+FORECAST_SERIES = ["log_price", "price", "log_return", "linear_return"]
+SERIES_WITH_LINEAR_MEAN = [
+    ("log_price", "LOG"),
+    ("price", "LINEAR"),
+    ("log_return", "LOG"),
+    ("linear_return", "LINEAR"),
+]
+SERIES_WITHOUT_LINEAR_MEAN = [
+    ("log_price", "LINEAR"),
+    ("price", "LOG"),
+    ("log_return", "LINEAR"),
+    ("linear_return", "LOG"),
+]
 
-def _sample(returns_dict, return_type="LOG", freq=1, num_scen=25, seed=3):
+
+def _sample(
+    returns_dict,
+    return_type="LOG",
+    freq=1,
+    num_scen=25,
+    seed=3,
+    forecast_series="log_price",
+):
     return generate_samples_jointfm(
-        num_scen, returns_dict["returns"], return_type, freq, JointFMSettings(), seed
+        num_scen,
+        returns_dict["returns"],
+        return_type,
+        freq,
+        JointFMSettings(forecast_series=forecast_series),
+        seed,
     )
+
+
+def _expected_returns(values, last, forecast_series, return_type):
+    """Reference conversion through each forecast value's next log return."""
+    match forecast_series:
+        case "log_price":
+            log_returns = values - last
+        case "price":
+            log_returns = np.log(values) - np.log(last)
+        case "log_return":
+            log_returns = values
+        case "linear_return":
+            log_returns = np.log1p(values)
+    return log_returns if return_type == "LOG" else np.expm1(log_returns)
 
 
 def _assert_log_prices_up_to_constant(history, prices):
@@ -70,18 +111,48 @@ def test_history_cut_to_n_input(price_data, returns_dict, fake_jointfm):
     _assert_log_prices_up_to_constant(history, price_data.iloc[-n_input:])
 
 
-@pytest.mark.parametrize("return_type", ["LOG", "LINEAR"])
-def test_forecast_log_price_becomes_next_return(
-    returns_dict, fake_jointfm, return_type
+def test_price_history_is_price_path_from_one(price_data, returns_dict, fake_jointfm):
+    """The price series is the price path scaled to start at 1."""
+    fake_jointfm.envelope.n_input = 1000
+    fake_jointfm.sample_scale = 0.01
+    _sample(returns_dict, forecast_series="price")
+    history = fake_jointfm.forecast_calls[0]["history"]
+    assert list(history.columns) == TICKERS
+    np.testing.assert_allclose(
+        history.to_numpy(), (price_data / price_data.iloc[0]).to_numpy(), rtol=1e-12
+    )
+
+
+@pytest.mark.parametrize("forecast_series", ["log_return", "linear_return"])
+def test_return_history_is_the_returns(
+    price_data, returns_dict, fake_jointfm, forecast_series
 ):
-    """A draw minus the last log price is the next log return, converted."""
-    samples = _sample(returns_dict, return_type=return_type)
+    """A return series is sent as the window's returns, one row per return."""
+    fake_jointfm.envelope.n_input = 1000
+    fake_jointfm.sample_scale = 0.01
+    _sample(returns_dict, forecast_series=forecast_series)
+    history = fake_jointfm.forecast_calls[0]["history"]
+    log_returns = np.diff(np.log(price_data.to_numpy()), axis=0)
+    expected = log_returns if forecast_series == "log_return" else np.expm1(log_returns)
+    np.testing.assert_allclose(history.to_numpy(), expected, rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("forecast_series", FORECAST_SERIES)
+@pytest.mark.parametrize("return_type", ["LOG", "LINEAR"])
+def test_forecast_becomes_next_return(
+    returns_dict, fake_jointfm, forecast_series, return_type
+):
+    """Every series' draw becomes the next period's return of return_type."""
+    fake_jointfm.sample_scale = 0.01
+    samples = _sample(
+        returns_dict, return_type=return_type, forecast_series=forecast_series
+    )
     (call,) = fake_jointfm.forecast_calls
-    last_log_prices = call["history"].iloc[-1].to_numpy()
-    assert np.all(np.abs(last_log_prices) > 1e-3)
-    next_log_returns = call["samples"][:, 0, :] - last_log_prices
-    expected = next_log_returns if return_type == "LOG" else np.expm1(next_log_returns)
-    np.testing.assert_allclose(samples, expected)
+    last = call["history"].iloc[-1].to_numpy()
+    expected = _expected_returns(
+        call["samples"][:, 0, :], last, forecast_series, return_type
+    )
+    np.testing.assert_allclose(samples, expected, rtol=1e-10, atol=1e-14)
     assert samples.shape == (25, len(TICKERS))
     assert samples.flags.writeable
 
@@ -109,6 +180,93 @@ def test_scenarios_never_imply_non_positive_prices(returns_dict, fake_jointfm):
     samples = _sample(returns_dict, return_type="LINEAR")
     assert samples.min() < -0.9
     assert np.all(1.0 + samples > 0.0)
+
+
+@pytest.mark.parametrize("forecast_series", ["price", "linear_return"])
+@pytest.mark.parametrize("return_type", ["LOG", "LINEAR"])
+def test_forecast_implying_non_positive_price_is_refused(
+    returns_dict, fake_jointfm, forecast_series, return_type
+):
+    """A draw at or below price 0 never becomes a scenario."""
+    fake_jointfm.sample_scale = 5.0
+    with pytest.raises(ValueError, match="non-positive price"):
+        _sample(returns_dict, return_type=return_type, forecast_series=forecast_series)
+
+
+@pytest.mark.parametrize("forecast_series", ["log_return", "linear_return"])
+def test_return_series_takes_next_period_alone(
+    returns_dict, fake_jointfm, forecast_series
+):
+    """A return series forecasts one future period's return, not a sum."""
+    with pytest.raises(ValueError, match="horizon 1 alone"):
+        generate_horizon_samples_jointfm(
+            25,
+            returns_dict["returns"],
+            "LOG",
+            1,
+            JointFMSettings(forecast_series=forecast_series),
+            (1, 5),
+        )
+    assert fake_jointfm.from_env_kwargs is None
+
+
+@pytest.mark.parametrize("forecast_series,return_type", SERIES_WITH_LINEAR_MEAN)
+def test_exact_mean_is_the_forecast_mean_as_a_return(
+    returns_dict, linear_returns_dict, fake_jointfm, forecast_series, return_type
+):
+    """A mean request on the sample request's history gives the mean return."""
+    returns = (returns_dict if return_type == "LOG" else linear_returns_dict)["returns"]
+    settings = JointFMSettings(forecast_series=forecast_series)
+    fake_jointfm.sample_scale = 0.01
+    samples, mean = generate_samples_and_mean_jointfm(
+        25, returns, return_type, 1, settings, 11
+    )
+    sample_call, mean_call = fake_jointfm.forecast_calls
+    assert (sample_call["return_mode"], mean_call["return_mode"]) == ("samples", "mean")
+    assert mean_call["history"] is sample_call["history"]
+    assert mean_call["query_times"] == sample_call["query_times"]
+    assert "n_samples" not in mean_call
+    assert "seed" not in mean_call
+    last = mean_call["history"].iloc[-1].to_numpy()
+    expected = _expected_returns(
+        mean_call["mean"][0], last, forecast_series, return_type
+    )
+    np.testing.assert_allclose(mean, expected, rtol=1e-10, atol=1e-14)
+    assert mean.shape == (len(TICKERS),)
+    np.testing.assert_array_equal(
+        samples, generate_samples_jointfm(25, returns, return_type, 1, settings, 11)
+    )
+
+
+@pytest.mark.parametrize("forecast_series,return_type", SERIES_WITHOUT_LINEAR_MEAN)
+def test_exact_mean_of_a_non_linear_return_is_refused(
+    returns_dict, fake_jointfm, forecast_series, return_type
+):
+    """The mean of a return non-linear in the forecast is never approximated."""
+    with pytest.raises(ValueError, match="not linear"):
+        generate_samples_and_mean_jointfm(
+            25,
+            returns_dict["returns"],
+            return_type,
+            1,
+            JointFMSettings(forecast_series=forecast_series),
+        )
+    assert fake_jointfm.from_env_kwargs is None
+
+
+def test_mean_response_of_other_shape_is_refused(returns_dict, fake_jointfm):
+    forecast = fake_jointfm.forecast
+
+    def two_horizon_mean(history, **kwargs):
+        if kwargs["return_mode"] == "mean":
+            kwargs["query_times"] = kwargs["query_times"] * 2
+        return forecast(history, **kwargs)
+
+    fake_jointfm.forecast = two_horizon_mean
+    with pytest.raises(ValueError, match="mean of shape"):
+        generate_samples_and_mean_jointfm(
+            25, returns_dict["returns"], "LOG", 1, JointFMSettings()
+        )
 
 
 def test_client_reads_settings_environment(returns_dict, fake_jointfm):

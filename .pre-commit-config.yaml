@@ -2,10 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 fail_fast: true
+default_install_hook_types: [pre-commit, commit-msg]
+# Hooks without their own `stages` run only before a commit; the commit-msg
+# stage then runs only the message check instead of every hook a second time.
+default_stages: [pre-commit]
 
 repos:
   - repo: local
     hooks:
+      # Commits land on main directly, so every subject feeds `cz bump` and the changelog.
+      - id: commitizen
+        name: commitizen (commit message)
+        entry: uv run cz check --allow-abort --commit-msg-file
+        language: system
+        stages: [commit-msg]
       - id: ruff-check
         name: ruff lint
         entry: uv run ruff check --fix

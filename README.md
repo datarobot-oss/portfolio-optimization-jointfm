@@ -29,10 +29,10 @@ flowchart LR
 
     settings --> registry
     registry -->|"entry point"| generate
-    generate -->|"log-price history"| client
+    generate -->|"log-price history<br/>(forecast_series)"| client
     client -->|"HTTP request"| service
     weights --> service
-    service -->|"joint samples"| client
+    service -->|"joint samples<br/>and exact mean"| client
     client -->|"forecast"| generate
     generate -->|"Scenarios"| cvardata
     cvardata --> workflows
@@ -41,8 +41,8 @@ flowchart LR
 NVIDIA's package does not depend on this package: it finds the generator through the entry point that this package declares when it is installed. This package depends on `jointfm-client` from PyPI. The runner loads the weights file and serves them to any client.
 
 1. `ScenarioGenerationSettings(fit_type="jointfm")` looks the name up in the scenario-generator registry, which finds this package through its installed entry point.
-2. The generator rebuilds each asset's log-price path from the look-back window's returns and sends all assets in one sample request through `jointfm-client`.
-3. The runner returns joint draws of the next log prices. The generator turns each draw into a next-period return, and NVIDIA's package uses the draws as CVaR scenarios.
+2. The generator rebuilds each asset's log-price path from the look-back window's returns (option `forecast_series` picks another series) and sends all assets in one sample request through `jointfm-client`, followed by one mean request on the same history.
+3. The runner returns joint draws of the next log prices and the exact mean of their distribution. The generator turns each draw into a next-period return, and NVIDIA's package uses the draws as CVaR scenarios and the mean as the expected returns.
 
 ## Requirements
 
@@ -230,15 +230,29 @@ Before switching, check that the workflow meets the generator's requirements, li
 
 ### Options and requirements
 
-The generator's own options go into `generator_options`, for example `generator_options={"expected_return": "historical"}`:
+The generator's own options go into `generator_options`, for example `generator_options={"forecast_series": "price"}`:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `expected_return` | `"scenario"` | `"scenario"` takes the expected returns from the mean of the JointFM scenarios; `"historical"` uses the look-back window's mean, as the built-in generators do |
+| `forecast_series` | `"log_price"` | The series of each asset that JointFM reads and forecasts, rebuilt from the window's returns: `"log_price"`, `"price"`, `"log_return"`, or `"linear_return"`; see below |
+| `expected_return` | `"exact"` | `"exact"` takes the expected returns from the exact mean of JointFM's forecast, with one more request per call; `"scenario"` from the mean of the JointFM scenarios, which carries their Monte Carlo noise; `"historical"` uses the look-back window's mean, as the built-in generators do |
 | `dotenv_path` | `".env"` | `.env` file the client reads; `None` reads only the process environment |
 | `config_path` | `"config.yaml"` | `jointfm-client` configuration file, such as the retry settings of step 4; a missing file is skipped |
 
-Unknown options are refused. The generator needs one-period returns, `LOG` or `LINEAR` with `freq=1`, because it rebuilds price paths from them. It sends all assets in one request, so the universe must fit `max_series`. It sends at most the `n_input` most recent points of the window. Because it converts forecast log prices back into returns, no scenario implies a non-positive price. `seed` is forwarded to the runner, so repeated requests with the same seed to one running service return the same scenarios; after a restart of the service, the draws can differ slightly.
+Unknown options are refused. The generator needs one-period returns, `LOG` or `LINEAR` with `freq=1`, because it rebuilds the forecast series from them. It sends all assets in one request, so the universe must fit `max_series`. It sends at most the `n_input` most recent points of the series. `seed` is forwarded to the runner, so repeated requests with the same seed to one running service return the same scenarios; after a restart of the service, the draws can differ slightly.
+
+`forecast_series` decides what JointFM forecasts. NVIDIA's package hands the generator returns only, so the generator rebuilds a price series from them, starting at price 1. JointFM reads every series relative to its last value and scaled by its spread, so the real price level would not change the forecast. The generator turns each forecast into a return of the series' own type and converts that, if needed, into the return type the workflow computes:
+
+| `forecast_series` | JointFM forecasts | Its own return | Exact mean for |
+| --- | --- | --- | --- |
+| `"log_price"` | the next log price | `LOG`: the difference to the last log price | `LOG` returns |
+| `"price"` | the next price | `LINEAR`: the ratio to the last price, minus 1 | `LINEAR` returns |
+| `"log_return"` | the next log return | `LOG`: the forecast itself | `LOG` returns |
+| `"linear_return"` | the next linear return | `LINEAR`: the forecast itself | `LINEAR` returns |
+
+JointFM centers every series on its last history value, which suits price series; the return series are there for comparison. A log series turns every forecast into a positive price. With `"price"` or `"linear_return"`, a forecast at or below price 0 is refused rather than passed on as a scenario. A return series forecasts the return of a single period, so `generate_horizon_samples_jointfm` takes horizon 1 alone with it.
+
+`expected_return="exact"` needs a return that is linear in the forecast, which is the *Exact mean for* column above: any other pairing is refused, because the mean of a log return does not determine the mean of a linear return, or the other way round. Workflows on `LINEAR` returns therefore set `forecast_series="price"` or `expected_return="scenario"`. The mean is exact on a service that computes it from the forecast distribution, such as the JointFM inference runner from release 0.5.0; an older runner estimates it from at most `max_sample_count` draws.
 
 ## Troubleshooting
 
@@ -251,6 +265,8 @@ Unknown options are refused. The generator needs one-period returns, `LOG` or `L
 | `ValidationError: 1 validation error for JointFMSettings ... Extra inputs are not permitted` | A misspelled key in `generator_options` | Use the option names of step 5 |
 | `fit_type='jointfm' forecasts all assets jointly in one request, and the served model accepts 1 to 100 series; got N assets` | The universe is larger than the runner's `max_series` | Select fewer assets |
 | `fit_type='jointfm' needs return_type in ('LOG', 'LINEAR')` or `needs one-period returns (freq=1)` | Returns without a price level, or overlapping multi-period returns | Compute returns with `return_type="LOG"` or `"LINEAR"` and `freq=1` |
+| `The exact expected return of forecast_series='log_price' is a LOG return, and a LINEAR return is not linear in it` | `expected_return="exact"`, the default, on `LINEAR` returns with a log series | Set `forecast_series="price"`, or `expected_return="scenario"` (see *Options and requirements*) |
+| `N of M JointFM forecasts of forecast_series='price' imply a non-positive price` | A price or linear-return forecast fell to or below price 0 | Use `forecast_series="log_price"` |
 | `task serve` exits with `RuntimeError: Error(s) in loading state_dict for JointFM` | The weights file was made for another runner release | Use weights that match your runner release |
 
 ## Develop
@@ -265,7 +281,21 @@ task pre-commit    # every commit hook on all files
 
 Every commit runs ruff lint with fixes, ruff format, and the full test suite, and is refused when any of them fails or changes a file; stage the changes and commit again. `task setup` installs these hooks, so it runs only in a git clone. `task` alone lists every target.
 
-The tests check that the installed entry point is found, that every request carries a log-price path, that the options reach the client, that misspelled options are refused, and that solves and a rebalancing run work on JointFM scenarios.
+The tests check that the installed entry point is found, that every forecast series is rebuilt from the returns and converted back, that the exact mean comes from a mean request on the scenarios' history and is refused where the return is not linear in the forecast, that the options reach the client, that misspelled options are refused, and that solves and a rebalancing run work on JointFM scenarios.
+
+### Commits and releases
+
+- Current package version: `0.1.0`
+
+Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and are cut with [Commitizen](https://commitizen-tools.github.io/commitizen/) from [Conventional Commits](https://www.conventionalcommits.org/), so the commit log decides what a release contains. Every commit message reads `<type>(<optional scope>): <summary>`, which the `commit-msg` hook that `task setup` installs checks; run `task setup` again in an older clone to install it. `feat` raises the minor version, `fix`, `perf`, and `refactor` the patch version, and `docs`, `test`, `build`, `ci`, `chore`, and `style` none. A breaking change (`feat!:`, or a `BREAKING CHANGE:` footer) raises the minor version while the package is on `0.x`.
+
+```sh
+task release:dry      # preview the next version and its CHANGELOG.md section
+task release          # bump the version, write CHANGELOG.md, commit, and tag v<version>
+task release:publish  # push main and the tag
+```
+
+`task release` refuses a working tree with changes, a branch other than `main`, a `main` that differs from `origin/main`, and a release without new commits; a release whose commits drive no bump becomes a patch release. The version line above and `version` in `pyproject.toml` belong to `cz bump`, so never edit them by hand. Commitizen bumps from the tag of the current version, and `task release:require-tag` says how to create it when it is missing.
 
 ## License
 

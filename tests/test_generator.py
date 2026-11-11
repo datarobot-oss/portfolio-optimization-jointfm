@@ -47,11 +47,24 @@ def test_scenarios_feed_cvar_data(returns_dict, fake_jointfm):
     cd = generate_cvar_data(returns_dict, _settings())["cvar_data"]
     assert cd.R.shape == (len(TICKERS), 25)
     np.testing.assert_allclose(cd.p, np.full(25, 1 / 25))
-    # The default takes expected returns from the scenarios themselves.
+    # The default takes expected returns from the forecast's exact mean, which
+    # the fake puts mean_step * (1, 2, 3) above the last log price.
+    np.testing.assert_allclose(
+        cd.mean, fake_jointfm.mean_step * np.arange(1, len(TICKERS) + 1), rtol=1e-9
+    )
+    sample_call, mean_call = fake_jointfm.forecast_calls
+    assert (sample_call["return_mode"], mean_call["return_mode"]) == ("samples", "mean")
+    assert sample_call["n_samples"] == 25
+    assert sample_call["seed"] == 11
+
+
+def test_scenario_expected_return_is_scenario_mean(returns_dict, fake_jointfm):
+    cd = generate_cvar_data(returns_dict, _settings(expected_return="scenario"))[
+        "cvar_data"
+    ]
     np.testing.assert_allclose(cd.mean, cd.R.mean(axis=1))
     (call,) = fake_jointfm.forecast_calls
-    assert call["n_samples"] == 25
-    assert call["seed"] == 11
+    assert call["return_mode"] == "samples"
 
 
 def test_historical_expected_return_is_window_mean(returns_dict, fake_jointfm):
@@ -62,15 +75,39 @@ def test_historical_expected_return_is_window_mean(returns_dict, fake_jointfm):
     np.testing.assert_array_equal(cd.mean, historical_mean)
 
 
-def test_scenario_expected_return_leaves_returns_dict_mean(returns_dict, fake_jointfm):
+@pytest.mark.parametrize("expected_return", ["exact", "scenario"])
+def test_model_expected_return_leaves_returns_dict_mean(
+    returns_dict, fake_jointfm, expected_return
+):
     historical_mean = returns_dict["mean"].copy()
-    cd = generate_cvar_data(returns_dict, _settings())["cvar_data"]
+    cd = generate_cvar_data(returns_dict, _settings(expected_return=expected_return))[
+        "cvar_data"
+    ]
     assert not np.allclose(cd.mean, historical_mean)
     np.testing.assert_array_equal(returns_dict["mean"], historical_mean)
 
 
+def test_default_exact_mean_of_linear_returns_is_refused(
+    linear_returns_dict, fake_jointfm
+):
+    """LINEAR returns take the exact mean only from the price series."""
+    with pytest.raises(ValueError, match="forecast_series='price'"):
+        generate_cvar_data(linear_returns_dict, _settings())
+    assert fake_jointfm.from_env_kwargs is None
+    fake_jointfm.sample_scale = 0.01
+    cd = generate_cvar_data(linear_returns_dict, _settings(forecast_series="price"))[
+        "cvar_data"
+    ]
+    assert cd.mean.shape == (len(TICKERS),)
+
+
 @pytest.mark.parametrize(
-    "options", [{"expected_returns": "historical"}, {"expected_return": "forecast"}]
+    "options",
+    [
+        {"expected_returns": "historical"},
+        {"expected_return": "forecast"},
+        {"forecast_series": "returns"},
+    ],
 )
 def test_invalid_options_are_refused_before_any_request(
     returns_dict, fake_jointfm, options
@@ -122,6 +159,10 @@ def test_rebalancing_requests_jointfm_at_every_decision(
         re_optimize_criteria={"type": "every_step", "threshold": None},
     )
     _, re_optimize_dates, _ = rebalancer.re_optimize()
-    # One request builds the initial portfolio, then one per re-optimization.
+    # The initial portfolio and every re-optimization each send a sample
+    # request and an exact-mean request.
     assert len(re_optimize_dates) > 0
-    assert len(fake_jointfm.forecast_calls) == len(re_optimize_dates) + 1
+    assert [call["return_mode"] for call in fake_jointfm.forecast_calls] == [
+        "samples",
+        "mean",
+    ] * (len(re_optimize_dates) + 1)

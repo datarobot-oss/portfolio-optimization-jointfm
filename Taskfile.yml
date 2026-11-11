@@ -18,7 +18,7 @@ tasks:
     cmds:
       - uv sync
       - uv run pre-commit install
-      - 'echo "OK: setup complete; every commit now runs ruff and the tests"'
+      - 'echo "OK: setup complete; every commit now runs ruff and the tests, and its message must follow Conventional Commits"'
 
   lint:
     desc: Run Ruff lint checks (read-only)
@@ -59,3 +59,127 @@ tasks:
         echo "FAIL: commit hooks reported issues"
         exit 1
       fi
+
+  release:require-tag:
+    desc: Fail fast if Commitizen has no base tag to bump from
+    cmd: |
+      EXPECTED="v$(uv run cz version --project)"
+      if git rev-parse -q --verify "refs/tags/$EXPECTED" >/dev/null; then
+        echo "OK: base tag $EXPECTED found"
+        exit 0
+      fi
+      echo "FAIL: base tag $EXPECTED does not exist."
+      echo "Commitizen needs an annotated tag matching the current pyproject version"
+      echo "to compute the next bump. Seed it once with:"
+      echo
+      echo "  git tag -a $EXPECTED -m 'Seed initial release tag for Commitizen'"
+      echo "  git push origin $EXPECTED"
+      echo
+      echo "Then rerun this task."
+      exit 1
+
+  release:dry:
+    desc: Preview the next SemVer bump (no commit, no tag, no file changes)
+    cmds:
+      - task: release:require-tag
+      - |
+        uv run cz bump --dry-run --yes --allow-no-commit {{.CLI_ARGS}}
+        echo "OK: dry-run succeeded (no files modified)"
+
+  release:check:
+    desc: Verify the working tree is ready to cut a release
+    cmds:
+      - task: release:require-tag
+      - |
+        echo "[1/4] checking working tree is clean..."
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "FAIL: working tree has uncommitted changes; commit or stash first"
+          exit 1
+        fi
+        echo "[2/4] checking current branch is main..."
+        BRANCH="$(git symbolic-ref --short HEAD)"
+        if [ "$BRANCH" != "main" ]; then
+          echo "FAIL: cz bump must run on main (currently on $BRANCH)"
+          exit 1
+        fi
+        echo "[3/4] fetching origin/main and checking alignment..."
+        git fetch --quiet origin main
+        if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+          echo "FAIL: local main is not aligned with origin/main; pull/push first"
+          exit 1
+        fi
+        # --allow-no-commit would otherwise re-release an unchanged tree under a new version.
+        BASE_TAG="v$(uv run cz version --project)"
+        echo "[4/4] checking main has commits since $BASE_TAG..."
+        if [ "$(git rev-list --count "$BASE_TAG..HEAD")" -eq 0 ]; then
+          echo "FAIL: no commits since $BASE_TAG; nothing to release"
+          exit 1
+        fi
+        echo "OK: release pre-flight passed"
+
+  release:
+    desc: Cut a SemVer release with Commitizen (writes CHANGELOG, bumps versions, tags)
+    cmds:
+      - task: release:check
+      - |
+        PREV="$(uv run cz version --project)"
+        echo "bumping version with Commitizen (writing files, tagging)..."
+        uv run cz bump --yes --allow-no-commit {{.CLI_ARGS}}
+        NEXT="$(uv run cz version --project)"
+        echo
+        echo "OK: released v$PREV -> v$NEXT"
+        echo "  bumped version in: pyproject.toml, README.md"
+        echo "  updated: CHANGELOG.md, uv.lock"
+        echo "  created tag: v$NEXT"
+        echo "  publish with: task release:publish"
+
+  release:publish:
+    desc: Push the release commit and its tag to origin
+    cmds:
+      - task: release:require-tag
+      - |
+        TAG="v$(uv run cz version --project)"
+        echo "[1/5] checking working tree is clean..."
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "FAIL: working tree has uncommitted changes; commit them first"
+          exit 1
+        fi
+        echo "[2/5] checking current branch is main..."
+        BRANCH="$(git symbolic-ref --short HEAD)"
+        if [ "$BRANCH" != "main" ]; then
+          echo "FAIL: releases are published from main (currently on $BRANCH)"
+          exit 1
+        fi
+        echo "[3/5] checking $TAG points at HEAD..."
+        if [ "$(git rev-parse "$TAG^{commit}")" != "$(git rev-parse HEAD)" ]; then
+          echo "FAIL: $TAG does not point at HEAD."
+          echo "The release published from this tag must match the commit on main."
+          echo "This usually means the release commit was squashed or rebased away,"
+          echo "so the tagged commit is no longer part of main."
+          exit 1
+        fi
+        echo "[4/5] checking $TAG is not already on origin..."
+        git fetch --quiet origin main
+        if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+          echo "FAIL: origin already has $TAG; a published version is never reused."
+          echo "Cut a new release instead of republishing this one."
+          exit 1
+        fi
+        echo "[5/5] commits to be pushed to origin/main:"
+        git --no-pager log --oneline origin/main..HEAD
+        echo
+        if [ -t 0 ]; then
+          printf 'Push main and %s to origin? [y/N] ' "$TAG"
+          read -r CONFIRMATION
+          case "$CONFIRMATION" in
+            y|Y|yes|YES) ;;
+            *)
+              echo "OK: aborted, nothing was pushed"
+              exit 1
+              ;;
+          esac
+        fi
+        git push origin main
+        git push origin "refs/tags/$TAG"
+        echo
+        echo "OK: pushed main and $TAG to origin"
