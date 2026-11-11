@@ -276,10 +276,11 @@ cd portfolio-optimization-jointfm
 task setup         # installs NVIDIA's package from git as a development dependency, and the commit hooks
 task test          # runs on CPU against a fake JointFM client; no runner needed
 task lint          # ruff check; task format rewrites files with ruff format
+task license-check # every Python file carries the license header
 task pre-commit    # every commit hook on all files
 ```
 
-Every commit runs ruff lint with fixes, ruff format, and the full test suite, and is refused when any of them fails or changes a file; stage the changes and commit again. `task setup` installs these hooks, so it runs only in a git clone. `task` alone lists every target.
+Every commit stamps the DataRobot Apache-2.0 license header, which [.licenserc.yaml](.licenserc.yaml) defines, into every Python file with [skywalking-eyes](https://github.com/apache/skywalking-eyes), so the hooks need Docker. It then runs ruff lint with fixes, ruff format, and the full test suite, and is refused when any of them fails or changes a file; stage the changes and commit again. `task setup` installs these hooks, so it runs only in a git clone. `task` alone lists every target.
 
 The tests check that the installed entry point is found, that every forecast series is rebuilt from the returns and converted back, that the exact mean comes from a mean request on the scenarios' history and is refused where the return is not linear in the forecast, that the options reach the client, that misspelled options are refused, and that solves and a rebalancing run work on JointFM scenarios.
 

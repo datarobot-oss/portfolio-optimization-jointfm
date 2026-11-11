@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 DataRobot, Inc. and its affiliates. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 fail_fast: true
 default_install_hook_types: [pre-commit, commit-msg]
 # Hooks without their own `stages` run only before a commit; the commit-msg
@@ -16,6 +13,13 @@ repos:
         entry: uv run cz check --allow-abort --commit-msg-file
         language: system
         stages: [commit-msg]
+      - id: insert-license
+        name: insert license header (python)
+        entry: apache/skywalking-eyes:0.8.0 -c .licenserc.yaml header fix
+        language: docker_image
+        pass_filenames: false
+        require_serial: true
+        always_run: true
       - id: ruff-check
         name: ruff lint
         entry: uv run ruff check --fix

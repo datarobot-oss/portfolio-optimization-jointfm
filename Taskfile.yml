@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 DataRobot, Inc. and its affiliates. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 version: "3"
 
 set: [errexit, nounset, pipefail]
@@ -18,7 +15,7 @@ tasks:
     cmds:
       - uv sync
       - uv run pre-commit install
-      - 'echo "OK: setup complete; every commit now runs ruff and the tests, and its message must follow Conventional Commits"'
+      - 'echo "OK: setup complete; every commit now stamps the license header and runs ruff and the tests, and its message must follow Conventional Commits"'
 
   lint:
     desc: Run Ruff lint checks (read-only)
@@ -27,6 +24,16 @@ tasks:
         echo "OK: ruff lint passed"
       else
         echo "FAIL: ruff lint reported issues"
+        exit 1
+      fi
+
+  license-check:
+    desc: Verify every Python file carries the DataRobot Apache-2.0 license header (read-only; needs Docker)
+    cmd: |
+      if docker run --rm -v "$PWD:/src" --workdir /src apache/skywalking-eyes:0.8.0 -c .licenserc.yaml header check; then
+        echo "OK: every Python file carries the license header"
+      else
+        echo "FAIL: files above lack the license header; task pre-commit stamps them"
         exit 1
       fi
 
@@ -51,7 +58,7 @@ tasks:
       fi
 
   pre-commit:
-    desc: Run every commit hook (ruff lint, ruff format, tests) on all files
+    desc: Run every commit hook (license header, ruff lint, ruff format, tests) on all files
     cmd: |
       if uv run pre-commit run --all-files; then
         echo "OK: commit hooks passed"
