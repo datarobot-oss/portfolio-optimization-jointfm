@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 DataRobot, Inc. and its affiliates. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: "3"
+
+set: [errexit, nounset, pipefail]
+silent: true
+
+tasks:
+  default:
+    cmd: task --list --sort alphanumeric
+
+  setup:
+    desc: Create or update the Python environment and install the git hooks
+    preconditions:
+      - sh: git rev-parse --git-dir >/dev/null 2>&1
+        msg: "FAIL: task setup installs git hooks and needs a git repository; clone this repository or run git init here"
+    cmds:
+      - uv sync
+      - uv run pre-commit install
+      - 'echo "OK: setup complete; every commit now runs ruff and the tests"'
+
+  lint:
+    desc: Run Ruff lint checks (read-only)
+    cmd: |
+      if uv run ruff check .; then
+        echo "OK: ruff lint passed"
+      else
+        echo "FAIL: ruff lint reported issues"
+        exit 1
+      fi
+
+  format:
+    desc: Run the Ruff formatter (rewrites files in place)
+    cmd: |
+      if uv run ruff format .; then
+        echo "OK: ruff format applied"
+      else
+        echo "FAIL: ruff format could not format every file"
+        exit 1
+      fi
+
+  test:
+    desc: "Run the tests on CPU against a fake JointFM client; no runner needed (pytest options go after --: task test -- -k sampler)"
+    cmd: |
+      if uv run pytest {{.CLI_ARGS}}; then
+        echo "OK: tests passed"
+      else
+        echo "FAIL: tests failed"
+        exit 1
+      fi
+
+  pre-commit:
+    desc: Run every commit hook (ruff lint, ruff format, tests) on all files
+    cmd: |
+      if uv run pre-commit run --all-files; then
+        echo "OK: commit hooks passed"
+      else
+        echo "FAIL: commit hooks reported issues"
+        exit 1
+      fi
