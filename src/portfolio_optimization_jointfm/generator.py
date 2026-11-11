@@ -10,7 +10,7 @@ finds it once this package is installed.
 
 from portfolio_optimization.scenario_generators import Scenarios
 
-from .sampler import generate_samples_jointfm
+from .sampler import generate_samples_and_mean_jointfm, generate_samples_jointfm
 from .settings import JointFMSettings
 
 
@@ -30,26 +30,32 @@ def generate(returns_dict: dict, settings) -> Scenarios:
     -------
     Scenarios
         ``R`` of shape (num_scen, n_assets) in the column order of
-        ``returns_dict["returns"]``; ``mean`` is the scenario mean when
-        ``expected_return='scenario'`` and None (the window's mean) when
-        ``'historical'``; ``p`` is None (equal weights).
+        ``returns_dict["returns"]``; ``mean`` is the forecast's exact mean
+        when ``expected_return='exact'``, the scenario mean when
+        ``'scenario'``, and None (the window's mean) when ``'historical'``;
+        ``p`` is None (equal weights).
 
     Raises
     ------
     pydantic.ValidationError
         If ``generator_options`` holds an unknown option or an invalid value.
     ValueError
-        As :func:`generate_horizon_samples_jointfm`.
+        As :func:`generate_samples_and_mean_jointfm` for
+        ``expected_return='exact'``, else as
+        :func:`generate_horizon_samples_jointfm`.
     """
     options = JointFMSettings.model_validate(settings.generator_options)
-    R = generate_samples_jointfm(
+    request = (
         settings.num_scen,
         returns_dict["returns"],
         returns_dict["return_type"],
         returns_dict["freq"],
         options,
-        seed=settings.seed,
     )
+    if options.expected_return == "exact":
+        R, mean = generate_samples_and_mean_jointfm(*request, seed=settings.seed)
+        return Scenarios(R, mean=mean)
+    R = generate_samples_jointfm(*request, seed=settings.seed)
     mean = R.mean(axis=0) if options.expected_return == "scenario" else None
     return Scenarios(R, mean=mean)
 
