@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "portfolio-optimization-jointfm"
 version = "0.1.0"
@@ -5,14 +9,46 @@ description = "JointFM scenario generator for NVIDIA's portfolio-optimization pa
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
-# NVIDIA's portfolio-optimization package is not on PyPI, so it is not declared
-# here: install it from its repository first (README).
+authors = [
+    { name = "Stefan Hackmann", email = "stefan.hackmann@datarobot.com" },
+]
+keywords = [
+    "cvar",
+    "datarobot",
+    "jointfm",
+    "portfolio-optimization",
+    "scenario-generation",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Typing :: Typed",
+]
+# NVIDIA's portfolio-optimization package is not on PyPI, and PyPI refuses a
+# dependency on a git URL, so it is not declared here (task build refuses
+# both): install it from its repository first (README).
 dependencies = [
     "jointfm-client==0.16.*",
     "numpy>=2.0",
     "pandas>=2.0",
     "pydantic>=2.12",
 ]
+
+[project.urls]
+Repository = "https://github.com/datarobot-oss/portfolio-optimization-jointfm"
+Changelog = "https://github.com/datarobot-oss/portfolio-optimization-jointfm/blob/main/CHANGELOG.md"
 
 [project.entry-points."portfolio_optimization.scenario_generators"]
 jointfm = "portfolio_optimization_jointfm.generator:generate"
@@ -26,16 +62,31 @@ dev = [
     "ruff>=0.15",
 ]
 
+[tool.uv]
+required-version = ">=0.10"
+exclude-newer = "14 days"
+# The quarantine window guards against freshly published third-party uploads.
+# jointfm-client is DataRobot's own SDK, released from a repository it controls,
+# so it is exempt: a client release must be installable here the day it ships.
+exclude-newer-package = { jointfm-client = "0 days" }
+# Windows is unsupported; resolve the lock only for the supported platforms.
+environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'"]
+
 [tool.uv.sources]
 # The first revision with the scenario-generator extension point.
 portfolio-optimization = { git = "https://github.com/NVIDIA-AI-Blueprints/portfolio-optimization.git", rev = "7d0bfc8326802c443b296270034e3259212f6450" }
 
-[build-system]
-requires = ["setuptools>=64"]
-build-backend = "setuptools.build_meta"
+[tool.hatch.build.targets.wheel]
+packages = ["src/portfolio_optimization_jointfm"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.build.targets.sdist]
+include = [
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/README.md",
+    "/pyproject.toml",
+    "/src/portfolio_optimization_jointfm",
+]
 
 [tool.ruff]
 line-length = 88
@@ -46,6 +97,7 @@ select = ["E", "F", "W", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["scripts"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"

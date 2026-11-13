@@ -57,6 +57,20 @@ tasks:
         exit 1
       fi
 
+  build:
+    desc: Build the source distribution and wheel into dist/ and validate them for PyPI
+    cmd: |
+      if ! uv build; then
+        echo "FAIL: uv build could not build the distribution"
+        exit 1
+      fi
+      if uv run python scripts/validate_distribution.py; then
+        echo "OK: dist/ holds a validated source distribution and wheel"
+      else
+        echo "FAIL: the distribution in dist/ must not be uploaded; see the message above"
+        exit 1
+      fi
+
   pre-commit:
     desc: Run every commit hook (license header, ruff lint, ruff format, tests) on all files
     cmd: |
