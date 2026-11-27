@@ -742,7 +742,7 @@ wheels = [
 
 [[package]]
 name = "jointfm-client"
-version = "0.16.0"
+version = "0.17.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -754,9 +754,9 @@ dependencies = [
     { name = "requests" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6f/e0/d2418e8711df528c761bb07f53601d1a5f6d2d3d60ce1f019a372ca1ffd7/jointfm_client-0.16.0.tar.gz", hash = "sha256:0e8a4b9eb22d7152e363907628373fdd1fd63347b6755ec3ac1639d71ababa19", size = 105782, upload-time = "2026-11-09T18:04:02.239Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/44/9c3ff5ae54d55243e7dccda497585748d3890b640fa9e7ddba200502f0fb/jointfm_client-0.17.1.tar.gz", hash = "sha256:1241950069b4ee6b291095beff2eff5ac8a0caf637060d48e5226225ab6fc430", size = 138639, upload-time = "2026-11-26T06:43:12.003Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e2/7c/bf9f2dc3de2442a890ce83a7c58eaf246ada06ee58d7d925297d81a35366/jointfm_client-0.16.0-py3-none-any.whl", hash = "sha256:094e845a8c82ba474b8189eaa0d63bef010a25c50653a5be6922a8b7a4554069", size = 95184, upload-time = "2026-11-09T18:04:00.8Z" },
+    { url = "https://files.pythonhosted.org/packages/18/0e/295182d1656b98d906c1fe113b4bb42587c33bb0797004a4b96cef633143/jointfm_client-0.17.1-py3-none-any.whl", hash = "sha256:7543d6e16260c9087756bfb19bead43153f134a258f3714ecd506300427cb212", size = 132472, upload-time = "2026-11-26T06:43:10.696Z" },
 ]
 
 [[package]]
@@ -1586,7 +1586,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "jointfm-client", specifier = "==0.16.*" },
+    { name = "jointfm-client", specifier = "~=0.17.1" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "pandas", specifier = ">=2.0" },
     { name = "pydantic", specifier = ">=2.12" },

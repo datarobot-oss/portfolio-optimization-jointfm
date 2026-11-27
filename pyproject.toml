@@ -40,7 +40,7 @@ classifiers = [
 # dependency on a git URL, so it is not declared here (task build refuses
 # both): install it from its repository first (README).
 dependencies = [
-    "jointfm-client==0.16.*",
+    "jointfm-client~=0.17.1",
     "numpy>=2.0",
     "pandas>=2.0",
     "pydantic>=2.12",
